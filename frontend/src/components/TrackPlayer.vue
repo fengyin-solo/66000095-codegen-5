@@ -150,6 +150,58 @@
       </div>
     </div>
 
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:#333;display:flex;justify-content:space-between;align-items:center">
+        <span>🗂️ 复核记录</span>
+        <span style="font-size:10px;color:#7b1fa2">{{ store.reviewRecords.length }} 条</span>
+      </div>
+
+      <button @click="handleSaveReview" :disabled="!canSaveReview"
+        :style="{ width:'100%', padding:'8px', borderRadius:'6px', border:'none',
+          background: canSaveReview ? '#7b1fa2' : '#e0e0e0', color: canSaveReview ? '#fff' : '#999',
+          cursor: canSaveReview ? 'pointer' : 'not-allowed', fontSize:'12px', fontWeight:500 }">
+        💾 保存复核记录
+      </button>
+      <div v-if="savedTipVisible" style="font-size:10px;color:#4caf50;margin-top:4px">✓ 已保存到复核列表</div>
+      <div v-else-if="store.trackData && !store.reviewSaveReady" style="font-size:10px;color:#999;margin-top:4px">
+        暂停播放或跳转到停留点/越界事件后可保存
+      </div>
+
+      <div v-if="store.reviewRecords.length === 0"
+        style="font-size:11px;color:#999;text-align:center;padding:10px 0 2px">
+        暂无复核记录
+      </div>
+      <div v-else style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto;margin-top:8px">
+        <div v-for="rec in store.reviewRecords" :key="rec.id"
+          style="padding:8px 10px;border-radius:6px;border:1px solid #e1bee7;background:#f9f4fb;font-size:11px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-weight:500;color:#6a1b9a">{{ rec.deviceName }}</span>
+            <span style="color:#888;font-size:10px">保存于 {{ formatFullTime(rec.savedAt) }}</span>
+          </div>
+          <div style="color:#888;font-size:10px;margin-bottom:4px">
+            {{ formatTime(rec.startTime) }} - {{ formatTime(rec.endTime) }}
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:#666;margin-bottom:6px">
+            <span>▶ {{ formatTime(rec.playbackTime) || '--' }} ({{ rec.playbackProgress }}%)</span>
+            <span>📍 {{ rec.pointCount }}</span>
+            <span>⏸️ {{ rec.stayPointCount }}</span>
+            <span>🚨 {{ rec.breachEventCount }}</span>
+            <span>图层: {{ layerSummary(rec) }}</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button @click="handleRestoreReview(rec.id)"
+              style="flex:1;padding:4px 0;border-radius:4px;border:none;background:#7b1fa2;color:#fff;cursor:pointer;font-size:11px">
+              恢复
+            </button>
+            <button @click="handleDeleteReview(rec.id)"
+              style="flex:1;padding:4px 0;border-radius:4px;border:1px solid #e0e0e0;background:#fff;color:#e53935;cursor:pointer;font-size:11px">
+              删除
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="store.trackData && store.trackData.stayPoints.length > 0"
       style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0;margin-bottom:12px;flex:1;overflow:auto;min-height:0">
       <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:#333;display:flex;justify-content:space-between;align-items:center">
@@ -233,6 +285,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useIotStore } from '../stores/iot';
+import type { TrackReviewRecord } from '../types';
 
 const store = useIotStore();
 
@@ -343,6 +396,61 @@ function handleSpeedChange() {
 function handleClose() {
   store.disableTrackPlayback();
   emit('close');
+}
+
+const savedTipVisible = ref(false);
+let savedTipTimer: number | null = null;
+
+const canSaveReview = computed(() => !!store.trackData && store.reviewSaveReady);
+
+function handleSaveReview() {
+  const id = store.saveReviewRecord();
+  if (id) {
+    savedTipVisible.value = true;
+    if (savedTipTimer) {
+      clearTimeout(savedTipTimer);
+    }
+    savedTipTimer = window.setTimeout(() => {
+      savedTipVisible.value = false;
+      savedTipTimer = null;
+    }, 2000);
+  }
+}
+
+function handleRestoreReview(id: string) {
+  const rec = store.reviewRecords.find(r => r.id === id);
+  store.restoreReviewRecord(id);
+  if (rec) {
+    selectedDeviceId.value = rec.deviceId;
+    startTimeStr.value = formatDateTimeLocal(new Date(rec.startTime));
+    endTimeStr.value = formatDateTimeLocal(new Date(rec.endTime));
+    selectedQuickPeriod.value = null;
+  }
+}
+
+function handleDeleteReview(id: string) {
+  store.deleteReviewRecord(id);
+}
+
+function formatFullTime(isoString: string): string {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function layerSummary(rec: TrackReviewRecord): string {
+  const parts: string[] = [];
+  if (rec.showTrack) parts.push('轨迹');
+  if (rec.showStayPoints) parts.push('停留点');
+  if (rec.showBreachEvents) parts.push('越界');
+  return parts.length > 0 ? parts.join('/') : '全部隐藏';
 }
 
 watch(() => store.playbackSpeed, (speed) => {

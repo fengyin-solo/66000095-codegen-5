@@ -97,6 +97,27 @@ export interface TrackData {
   totalDuration: number;
 }
 
+export interface TrackReviewRecord {
+  id: string;
+  savedAt: string;
+  deviceId: string;
+  deviceName: string;
+  startTime: string;
+  endTime: string;
+  playbackIndex: number;
+  playbackTime: string;
+  playbackProgress: number;
+  showTrack: boolean;
+  showStayPoints: boolean;
+  showBreachEvents: boolean;
+  pointCount: number;
+  stayPointCount: number;
+  breachEventCount: number;
+  totalDistance: number;
+  totalDuration: number;
+  track: TrackData;
+}
+
 export interface HealthDataPoint {
   timestamp: string;
   battery: number;

@@ -1,9 +1,23 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, TrackReviewRecord, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
+}
+
+const REVIEW_STORAGE_KEY = 'iot_track_review_records';
+const MAX_REVIEW_RECORDS = 50;
+
+function loadReviewRecords(): TrackReviewRecord[] {
+  try {
+    const raw = localStorage.getItem(REVIEW_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 export const useIotStore = defineStore('iot', () => {
@@ -73,6 +87,9 @@ export const useIotStore = defineStore('iot', () => {
   const showStayPoints = ref(true);
   const showBreachEvents = ref(true);
   const playbackInterval = ref<number | null>(null);
+
+  const reviewRecords = ref<TrackReviewRecord[]>(loadReviewRecords());
+  const reviewSaveReady = ref(false);
 
   const groups = ref<DeviceGroup[]>([
     { id: 'g1', name: '生产车间', color: '#1976d2', description: '生产线设备' },
@@ -507,6 +524,7 @@ export const useIotStore = defineStore('iot', () => {
     playbackEndTime.value = endTime;
     trackData.value = generateMockTrackData(deviceId, startTime, endTime);
     playbackCurrentIndex.value = 0;
+    reviewSaveReady.value = false;
     stopPlayback();
   }
 
@@ -539,6 +557,9 @@ export const useIotStore = defineStore('iot', () => {
 
   function pausePlayback() {
     isPlaying.value = false;
+    if (trackData.value) {
+      reviewSaveReady.value = true;
+    }
     if (playbackInterval.value) {
       clearInterval(playbackInterval.value);
       playbackInterval.value = null;
@@ -577,6 +598,7 @@ export const useIotStore = defineStore('iot', () => {
     const idx = trackData.value.points.findIndex(p => p.timestamp >= stayPoint.startTime);
     if (idx !== -1) {
       seekToIndex(idx);
+      reviewSaveReady.value = true;
     }
   }
 
@@ -585,6 +607,7 @@ export const useIotStore = defineStore('iot', () => {
     const idx = trackData.value.points.findIndex(p => p.timestamp === breachPoint.timestamp);
     if (idx !== -1) {
       seekToIndex(idx);
+      reviewSaveReady.value = true;
     }
   }
 
@@ -598,6 +621,7 @@ export const useIotStore = defineStore('iot', () => {
     trackData.value = null;
     playbackDeviceId.value = null;
     playbackCurrentIndex.value = 0;
+    reviewSaveReady.value = false;
   }
 
   function toggleTrackVisibility() {
@@ -610,6 +634,77 @@ export const useIotStore = defineStore('iot', () => {
 
   function toggleBreachEventsVisibility() {
     showBreachEvents.value = !showBreachEvents.value;
+  }
+
+  function persistReviewRecords() {
+    while (true) {
+      try {
+        localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(reviewRecords.value));
+        return;
+      } catch {
+        if (reviewRecords.value.length > 1) {
+          reviewRecords.value.pop();
+        } else {
+          return;
+        }
+      }
+    }
+  }
+
+  function saveReviewRecord() {
+    if (!trackData.value || !reviewSaveReady.value) return null;
+    const snapshot = JSON.parse(JSON.stringify(trackData.value)) as TrackData;
+    const progress = playbackProgress.value;
+    const record: TrackReviewRecord = {
+      id: generateId('r'),
+      savedAt: new Date().toISOString(),
+      deviceId: snapshot.deviceId,
+      deviceName: snapshot.deviceName,
+      startTime: snapshot.startTime,
+      endTime: snapshot.endTime,
+      playbackIndex: playbackCurrentIndex.value,
+      playbackTime: playbackCurrentTime.value,
+      playbackProgress: Number.isFinite(progress) ? Math.round(progress * 10) / 10 : 0,
+      showTrack: showTrack.value,
+      showStayPoints: showStayPoints.value,
+      showBreachEvents: showBreachEvents.value,
+      pointCount: snapshot.points.length,
+      stayPointCount: snapshot.stayPoints.length,
+      breachEventCount: snapshot.breachEvents.length,
+      totalDistance: snapshot.totalDistance,
+      totalDuration: snapshot.totalDuration,
+      track: snapshot
+    };
+    reviewRecords.value.unshift(record);
+    if (reviewRecords.value.length > MAX_REVIEW_RECORDS) {
+      reviewRecords.value = reviewRecords.value.slice(0, MAX_REVIEW_RECORDS);
+    }
+    persistReviewRecords();
+    return record.id;
+  }
+
+  function deleteReviewRecord(id: string) {
+    const idx = reviewRecords.value.findIndex(r => r.id === id);
+    if (idx !== -1) {
+      reviewRecords.value.splice(idx, 1);
+      persistReviewRecords();
+    }
+  }
+
+  function restoreReviewRecord(id: string) {
+    const record = reviewRecords.value.find(r => r.id === id);
+    if (!record) return;
+    trackData.value = JSON.parse(JSON.stringify(record.track)) as TrackData;
+    playbackDeviceId.value = record.deviceId;
+    playbackStartTime.value = record.startTime;
+    playbackEndTime.value = record.endTime;
+    const maxIndex = Math.max(0, trackData.value.points.length - 1);
+    playbackCurrentIndex.value = Math.max(0, Math.min(record.playbackIndex, maxIndex));
+    showTrack.value = record.showTrack;
+    showStayPoints.value = record.showStayPoints;
+    showBreachEvents.value = record.showBreachEvents;
+    stopPlayback();
+    reviewSaveReady.value = true;
   }
 
   function formatDuration(seconds: number): string {
@@ -868,6 +963,7 @@ export const useIotStore = defineStore('iot', () => {
     playbackStartTime, playbackEndTime, playbackCurrentIndex,
     isPlaying, playbackSpeed, showTrack, showStayPoints, showBreachEvents,
     playbackCurrentPoint, playbackProgress, playbackCurrentTime,
+    reviewRecords, reviewSaveReady,
     deviceHealthList, priorityInspectionList, healthSummary, recentAbnormalRecords,
     getDeviceById, getFenceById, getGroupById, getDeviceHealth,
     acknowledgeAlert, batchAcknowledgeAlerts, acknowledgeAllAlerts,
@@ -880,6 +976,7 @@ export const useIotStore = defineStore('iot', () => {
     jumpToStayPoint, jumpToBreachEvent,
     enableTrackPlayback, disableTrackPlayback,
     toggleTrackVisibility, toggleStayPointsVisibility, toggleBreachEventsVisibility,
+    saveReviewRecord, deleteReviewRecord, restoreReviewRecord,
     formatDuration, formatDistance
   };
 });
