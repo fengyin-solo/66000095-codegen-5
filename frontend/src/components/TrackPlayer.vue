@@ -50,6 +50,75 @@
       </button>
     </div>
 
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:#333;display:flex;justify-content:space-between;align-items:center">
+        <span>📑 轨迹复核记录</span>
+        <span style="font-size:10px;color:#888">{{ store.reviewRecords.length }} 条</span>
+      </div>
+
+      <div v-if="store.reviewSaveMessage"
+        style="font-size:11px;color:#2e7d32;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:4px;padding:6px 8px;margin-bottom:8px">
+        {{ store.reviewSaveMessage }}
+      </div>
+
+      <div v-if="store.reviewRecords.length === 0"
+        style="font-size:11px;color:#999;text-align:center;padding:14px 8px;background:#fafafa;border-radius:6px;border:1px dashed #e0e0e0">
+        暂无复核记录<br>暂停或跳转到停留点、越界事件后可保存当前回放状态
+      </div>
+
+      <div v-else style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow:auto">
+        <div v-for="record in store.reviewRecords" :key="record.id"
+          style="border:1px solid #e0e0e0;border-radius:6px;padding:8px 10px;background:#fcfcfc">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
+            <span style="font-size:12px;font-weight:500;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              🚚 {{ record.deviceName }}
+            </span>
+            <span style="font-size:10px;color:#999;white-space:nowrap">💾 {{ formatSavedTime(record.savedAt) }}</span>
+          </div>
+
+          <div style="font-size:10px;color:#888;margin-bottom:6px">
+            {{ formatRangeTime(record.startTime) }} ~ {{ formatRangeTime(record.endTime) }}
+          </div>
+
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:#f5f5f5;color:#666">
+              轨迹点 {{ record.trackData.points.length }}
+            </span>
+            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:#fff3e0;color:#e65100">
+              停留 {{ record.trackData.stayPoints.length }}
+            </span>
+            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:#ffebee;color:#c62828">
+              越界 {{ record.trackData.breachEvents.length }}
+            </span>
+            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:#e3f2fd;color:#1565c0">
+              ▶ {{ getRecordPositionLabel(record) }}
+            </span>
+          </div>
+
+          <div style="display:flex;gap:4px;margin-bottom:8px">
+            <span v-for="layer in getRecordLayers(record)" :key="layer.key"
+              :style="{ fontSize:'10px', padding:'2px 6px', borderRadius:'4px',
+                border: layer.on ? '1px solid #c8e6c9' : '1px solid #eee',
+                background: layer.on ? '#f1f8e9' : '#fafafa',
+                color: layer.on ? '#558b2f' : '#bbb' }">
+              {{ layer.icon }} {{ layer.label }}
+            </span>
+          </div>
+
+          <div style="display:flex;gap:6px">
+            <button @click="handleRestoreReview(record.id)"
+              style="flex:1;padding:5px 0;border-radius:4px;border:none;background:#1976d2;color:#fff;cursor:pointer;font-size:11px">
+              ↩ 恢复
+            </button>
+            <button @click="handleDeleteReview(record.id)"
+              style="flex:1;padding:5px 0;border-radius:4px;border:1px solid #e57373;background:#fff;color:#e53935;cursor:pointer;font-size:11px">
+              🗑 删除
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="store.trackData" style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f0f0f0">
         <span style="color:#666">设备:</span>
@@ -124,6 +193,12 @@
           <span>{{ formatTime(store.trackData.endTime) }}</span>
         </div>
       </div>
+
+      <button @click="handleSaveReview"
+        :style="{ width:'100%', marginTop:'10px', padding:'8px', borderRadius:'6px', border:'1px solid #1976d2',
+          background:'#fff', color:'#1976d2', cursor:'pointer', fontSize:'12px', fontWeight:500 }">
+        💾 保存复核记录
+      </button>
     </div>
 
     <div v-if="store.trackData" style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0;margin-bottom:12px">
@@ -233,6 +308,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useIotStore } from '../stores/iot';
+import type { TrackReviewRecord } from '../types';
 
 const store = useIotStore();
 
@@ -338,6 +414,66 @@ function handleProgressChange(e: Event) {
 
 function handleSpeedChange() {
   store.setPlaybackSpeed(speedValue.value);
+}
+
+function formatSavedTime(isoString: string): string {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatRangeTime(isoString: string): string {
+  if (!isoString) return '--';
+  const date = new Date(isoString);
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function getRecordPositionLabel(record: TrackReviewRecord): string {
+  const total = record.trackData.points.length;
+  if (total === 0) return '0%';
+  const index = Math.max(0, Math.min(record.currentIndex, total - 1));
+  const percent = total <= 1 ? 100 : Math.round((index / (total - 1)) * 100);
+  return `${percent}%`;
+}
+
+function getRecordLayers(record: TrackReviewRecord) {
+  return [
+    { key: 'track', icon: '📍', label: '轨迹', on: record.layers.showTrack },
+    { key: 'stay', icon: '⏸️', label: '停留点', on: record.layers.showStayPoints },
+    { key: 'breach', icon: '🚨', label: '越界', on: record.layers.showBreachEvents }
+  ];
+}
+
+function handleSaveReview() {
+  store.saveReviewRecord();
+}
+
+function handleRestoreReview(id: string) {
+  const record = store.reviewRecords.find(r => r.id === id);
+  store.restoreReviewRecord(id);
+  if (record) {
+    selectedDeviceId.value = record.deviceId;
+    startTimeStr.value = formatDateTimeLocal(new Date(record.startTime));
+    endTimeStr.value = formatDateTimeLocal(new Date(record.endTime));
+    selectedQuickPeriod.value = null;
+    speedValue.value = record.speed;
+  }
+}
+
+function handleDeleteReview(id: string) {
+  if (confirm('确定要删除该复核记录吗？删除后无法再次恢复。')) {
+    store.deleteReviewRecord(id);
+  }
 }
 
 function handleClose() {

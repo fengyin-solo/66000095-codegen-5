@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary, TrackReviewRecord } from '../types';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -73,6 +73,42 @@ export const useIotStore = defineStore('iot', () => {
   const showStayPoints = ref(true);
   const showBreachEvents = ref(true);
   const playbackInterval = ref<number | null>(null);
+
+  const REVIEW_RECORDS_STORAGE_KEY = 'iot-track-review-records';
+
+  function loadReviewRecords(): TrackReviewRecord[] {
+    try {
+      const raw = localStorage.getItem(REVIEW_RECORDS_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as TrackReviewRecord[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  const reviewRecords = ref<TrackReviewRecord[]>(loadReviewRecords());
+  const reviewSaveMessage = ref('');
+  let reviewMessageTimer: number | null = null;
+
+  function flashReviewMessage(message: string) {
+    reviewSaveMessage.value = message;
+    if (reviewMessageTimer) {
+      clearTimeout(reviewMessageTimer);
+    }
+    reviewMessageTimer = window.setTimeout(() => {
+      reviewSaveMessage.value = '';
+    }, 2500);
+  }
+
+  function persistReviewRecords() {
+    try {
+      localStorage.setItem(REVIEW_RECORDS_STORAGE_KEY, JSON.stringify(reviewRecords.value));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   const groups = ref<DeviceGroup[]>([
     { id: 'g1', name: '生产车间', color: '#1976d2', description: '生产线设备' },
@@ -612,6 +648,79 @@ export const useIotStore = defineStore('iot', () => {
     showBreachEvents.value = !showBreachEvents.value;
   }
 
+  function saveReviewRecord(): boolean {
+    if (!trackData.value) {
+      flashReviewMessage('当前没有可保存的轨迹');
+      return false;
+    }
+
+    // 保存时冻结播放状态，确保记录的播放位置准确
+    pausePlayback();
+
+    const record: TrackReviewRecord = {
+      id: generateId('review'),
+      savedAt: new Date().toISOString(),
+      deviceId: playbackDeviceId.value || trackData.value.deviceId,
+      deviceName: trackData.value.deviceName,
+      startTime: playbackStartTime.value || trackData.value.startTime,
+      endTime: playbackEndTime.value || trackData.value.endTime,
+      currentIndex: playbackCurrentIndex.value,
+      speed: playbackSpeed.value,
+      layers: {
+        showTrack: showTrack.value,
+        showStayPoints: showStayPoints.value,
+        showBreachEvents: showBreachEvents.value
+      },
+      // 快照轨迹数据：mock 轨迹按时间范围重新生成会产生随机结果，
+      // 只有保存完整快照才能保证恢复后轨迹、统计和停留点判断与保存时一致
+      trackData: JSON.parse(JSON.stringify(trackData.value)) as TrackData
+    };
+
+    // 同一轨迹重复保存各自保留：使用独立 id，新记录置顶
+    reviewRecords.value.unshift(record);
+
+    if (!persistReviewRecords()) {
+      // 持久化失败（通常是存储空间不足），撤销本次保存
+      reviewRecords.value.shift();
+      flashReviewMessage('保存失败：本地存储空间不足');
+      return false;
+    }
+
+    flashReviewMessage('✅ 复核记录已保存');
+    return true;
+  }
+
+  function deleteReviewRecord(id: string) {
+    const idx = reviewRecords.value.findIndex(r => r.id === id);
+    if (idx === -1) return;
+    reviewRecords.value.splice(idx, 1);
+    persistReviewRecords();
+  }
+
+  function restoreReviewRecord(id: string) {
+    const record = reviewRecords.value.find(r => r.id === id);
+    if (!record) return;
+
+    stopPlayback();
+
+    playbackDeviceId.value = record.deviceId;
+    playbackStartTime.value = record.startTime;
+    playbackEndTime.value = record.endTime;
+    trackData.value = JSON.parse(JSON.stringify(record.trackData)) as TrackData;
+
+    const maxIndex = Math.max(0, trackData.value.points.length - 1);
+    playbackCurrentIndex.value = Math.max(0, Math.min(record.currentIndex, maxIndex));
+    playbackSpeed.value = record.speed;
+
+    showTrack.value = record.layers.showTrack;
+    showStayPoints.value = record.layers.showStayPoints;
+    showBreachEvents.value = record.layers.showBreachEvents;
+
+    // 恢复后保持暂停，由用户决定从保存位置继续播放
+    isPlaying.value = false;
+    trackPlaybackEnabled.value = true;
+  }
+
   function formatDuration(seconds: number): string {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -868,6 +977,7 @@ export const useIotStore = defineStore('iot', () => {
     playbackStartTime, playbackEndTime, playbackCurrentIndex,
     isPlaying, playbackSpeed, showTrack, showStayPoints, showBreachEvents,
     playbackCurrentPoint, playbackProgress, playbackCurrentTime,
+    reviewRecords, reviewSaveMessage,
     deviceHealthList, priorityInspectionList, healthSummary, recentAbnormalRecords,
     getDeviceById, getFenceById, getGroupById, getDeviceHealth,
     acknowledgeAlert, batchAcknowledgeAlerts, acknowledgeAllAlerts,
@@ -880,6 +990,7 @@ export const useIotStore = defineStore('iot', () => {
     jumpToStayPoint, jumpToBreachEvent,
     enableTrackPlayback, disableTrackPlayback,
     toggleTrackVisibility, toggleStayPointsVisibility, toggleBreachEventsVisibility,
+    saveReviewRecord, deleteReviewRecord, restoreReviewRecord,
     formatDuration, formatDistance
   };
 });

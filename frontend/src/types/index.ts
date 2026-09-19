@@ -97,6 +97,25 @@ export interface TrackData {
   totalDuration: number;
 }
 
+export interface ReviewLayerState {
+  showTrack: boolean;
+  showStayPoints: boolean;
+  showBreachEvents: boolean;
+}
+
+export interface TrackReviewRecord {
+  id: string;
+  savedAt: string;
+  deviceId: string;
+  deviceName: string;
+  startTime: string;
+  endTime: string;
+  currentIndex: number;
+  speed: number;
+  layers: ReviewLayerState;
+  trackData: TrackData;
+}
+
 export interface HealthDataPoint {
   timestamp: string;
   battery: number;
